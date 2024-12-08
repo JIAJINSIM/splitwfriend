@@ -83,7 +83,21 @@ const Home: React.FC = () => {
     };
 
     const deleteExpense = (expenseToDelete: Expense) => {
+        // Remove expense and update user balances accordingly
         setExpenses((prevExpenses) => prevExpenses.filter((exp) => exp !== expenseToDelete));
+
+        // Adjust the users' balances if necessary after deleting an expense
+        const updatedUsers = users.map((user) => {
+            expenseToDelete.friends.forEach((friend) => {
+                if (friend.id === user.id) {
+                    // Add back the amount to the user's balance
+                    user.balance += expenseToDelete.amount / expenseToDelete.friends.length;
+                }
+            });
+            return user;
+        });
+
+        setUsers(updatedUsers);
     };
 
     const totalAmount = expenses.reduce((sum, expense) => sum + expense.amount, 0);
@@ -160,18 +174,28 @@ const Home: React.FC = () => {
 
             {/* Expenses List */}
             <h2 className="mt-8 text-xl">Expenses</h2>
-            <ul className="w-full max-w-md mt-4 bg-white rounded shadow-md">
-                {filteredExpenses.map((expense, index) => (
-                    <li key={index} className="flex justify-between p-4 border-b last:border-b-0">
-                        <span>{expense.description}</span>
-                        <span>${expense.amount.toFixed(2)}</span>
-                        <div>
-                            <button onClick={() => handleEditExpense(expense)} className="mr-2 text-blue-500">Edit</button>
-                            <button onClick={() => deleteExpense(expense)} className="text-red-500">Delete</button>
-                        </div>
-                    </li>
-                ))}
-            </ul>
+                <ul className="w-full max-w-md mt-4 bg-white rounded shadow-md">
+                    {filteredExpenses.map((expense, index) => (
+                        <li key={index} className="flex justify-between p-4 border-b last:border-b-0">
+                            <div>
+                                <span>{expense.description}</span><br />
+                                <span>${expense.amount.toFixed(2)}</span>
+                                <div>
+                                    {expense.friends.map(friend => (
+                                    <div key={friend.id}>
+                                        {friend.name} owes: ${expense.amountsOwed[friend.name].toFixed(2)}
+                                    </div>
+                                ))}
+                                </div>
+                            </div>
+            <div>
+                <button onClick={() => handleEditExpense(expense)} className="mr-2 text-blue-500">Edit</button>
+                <button onClick={() => deleteExpense(expense)} className="text-red-500">Delete</button>
+            </div>
+        </li>
+    ))}
+</ul>
+
 
             {/* Total Expenses */}
             <h2 className="mt-4 text-xl font-bold">Total Expenses: ${totalAmount.toFixed(2)}</h2>

@@ -40,12 +40,24 @@ const ExpenseForm: React.FC<ExpenseFormProps> = ({
 
     const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();
+
+        // Calculate the amount owed per friend
+        const amountPerFriend = parseFloat(amount) / selectedFriends.length;
+
+        // Calculate the amounts owed for each friend
+        const amountsOwed = selectedFriends.reduce((acc, friend) => {
+            acc[friend.name] = amountPerFriend; // Each friend owes an equal share
+            return acc;
+        }, {} as { [key: string]: number });
+
         const newExpense: Expense = { 
             description, 
             amount: parseFloat(amount), 
             category,
-            friends: selectedFriends 
+            friends: selectedFriends,
+            amountsOwed, // Include amountsOwed in the new expense
         };
+
         onAddExpense(newExpense);
         setDescription('');
         setAmount('');

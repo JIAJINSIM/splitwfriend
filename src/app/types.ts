@@ -4,6 +4,7 @@ export interface Expense {
     amount: number;
     category: string; // Add the category field
     friends: User[]; // Array of friends who are splitting the expense
+    amountsOwed: { [key: string]: number }; // A mapping of user names to the amount they owe
 }
 
 export interface User {
