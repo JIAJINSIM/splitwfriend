@@ -2,72 +2,152 @@
 
 import React, { useState, useEffect } from 'react';
 import ExpenseForm from './ExpenseForm';
-import { Expense, User } from './types';
+import { Expense, AppUser } from './types';
+import { User } from 'firebase/auth';
+import Link from "next/link";
+import { useRouter } from 'next/navigation';
+import { auth } from "../firebase";
+import { 
+    addExpenseToDb, 
+    getExpensesForUser, 
+    updateExpenseInDb, 
+    deleteExpenseFromDb,
+    addUserToDb,
+    getUsersForUser,
+    setupInitialUser,
+    updateUserInDb
+} from './firebaseOperation';
+//import { FirebaseError } from 'firebase/app';
 
 const Home: React.FC = () => {
+    const router = useRouter();
     const [expenses, setExpenses] = useState<Expense[]>([]);
-    const [users, setUsers] = useState<User[]>([{ id: 'me', name: 'me', balance: 0 }]); // Always add "me" to the list
-    const [userName, setUserName] = useState<string>(''); // Friend name input
+    const [users, setUsers] = useState<AppUser[]>([]);
+    const [userName, setUserName] = useState<string>('');
     const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
     const [filterCategory, setFilterCategory] = useState<string>('');
+    const [currentUser, setCurrentUser] = useState<User | null>(null);
 
-    // Load saved expenses from localStorage
+    // In page.tsx - Update the auth state change handler
     useEffect(() => {
-        const savedExpenses = localStorage.getItem('expenses');
-        if (savedExpenses) {
-            setExpenses(JSON.parse(savedExpenses));
-        }
-    }, []);
-
-    // Load saved users (friends) from localStorage, ensuring "me" is always included
-    useEffect(() => {
-        const savedUsers = localStorage.getItem('users');
-        if (savedUsers) {
-            const parsedUsers = JSON.parse(savedUsers);
-            if (!parsedUsers.find((user: User) => user.name === 'me')) {
-                // Ensure "me" is in the list even if not saved previously
-                parsedUsers.push({ id: 'me', name: 'me', balance: 0 });
+        const unsubscribe = auth.onAuthStateChanged(async (user) => {
+            if (!user) {
+                router.push('/auth');
+            } else {
+                setCurrentUser(user);
+                try {
+                    // Set up the initial user document if it doesn't exist
+                    await setupInitialUser(user.uid);
+                    await loadExpenses(user.uid);
+                    await loadUsers(user.uid);
+                } catch (error) {
+                    console.error('Error setting up user:', error);
+                }
             }
-            setUsers(parsedUsers);
-        }
-    }, []);
+        });
+        return () => unsubscribe();
+    }, [router]);
 
-    // Save expenses to localStorage
-    useEffect(() => {
-        localStorage.setItem('expenses', JSON.stringify(expenses));
-    }, [expenses]);
-
-    // Save users (friends) to localStorage
-    useEffect(() => {
-        localStorage.setItem('users', JSON.stringify(users));
-    }, [users]);
-
-    // Add user (friend) only on button click
-    const addUser = () => {
-        if (userName.trim() !== "") {
-            setUsers((prevUsers) => [
-                ...prevUsers,
-                { id: `${Date.now()}`, name: userName, balance: 0 },
-            ]);
-            setUserName(""); // Reset the input field after adding the user
+    const loadExpenses = async (userId: string) => {
+        try {
+            const loadedExpenses = await getExpensesForUser(userId);
+            setExpenses(loadedExpenses);
+        } catch (error) {
+            console.error('Error loading expenses:', error);
         }
     };
 
-    const addExpense = (newExpense: Expense) => {
-        const totalFriends = newExpense.friends.length;
-        if (totalFriends > 0) {
-            const amountPerFriend = newExpense.amount / totalFriends; // Split evenly among selected friends
+    const loadUsers = async (userId: string) => {
+        try {
+            const loadedUsers = await getUsersForUser(userId);
+            
+            // Find current user in loaded users
+            const currentUserIndex = loadedUsers.findIndex(user => user.id === userId);
+            
+            if (currentUserIndex === -1) {
+                // If current user not found, set up initial user
+                const currentUser = await setupInitialUser(userId);
+                loadedUsers.unshift(currentUser);
+            } else {
+                // Move current user to front of array
+                const [currentUser] = loadedUsers.splice(currentUserIndex, 1);
+                loadedUsers.unshift(currentUser);
+            }
+            
+            setUsers(loadedUsers);
+        } catch (error) {
+            console.error('Error loading users:', error);
+        }
+    };
 
-            // Update the balance for each selected friend
-            const updatedUsers = users.map((user) => {
-                if (newExpense.friends.some((friend) => friend.id === user.id)) {
-                    return { ...user, balance: user.balance - amountPerFriend }; // Deduct share from balance
+    const handleLogout = async () => {
+        try {
+            await auth.signOut();
+            router.push('/auth');
+        } catch (error: unknown) {
+            if (error instanceof Error) {
+
+                alert(error.message);
+            }
+            else
+            {
+                alert("An unknown error occurred"); // Fallback for non-Error errors
+                }
+        }
+    };
+
+    const addUser = async () => {
+        if (userName.trim() !== "" && currentUser) {
+            try {
+                const newUser = {
+                    name: userName,
+                    balance: 0,
+                    createdBy: currentUser.uid
+                };
+                const addedUser = await addUserToDb(newUser);
+                setUsers(prev => [...prev, addedUser]);
+                setUserName("");
+            } catch (error) {
+                console.error('Error adding user:', error);
+            }
+        }
+    };
+    const updateUserBalances = async (updatedUsers: AppUser[]) => {
+        try {
+            // Assuming you have a function in firebaseOperation.ts to update user balances
+            for (const user of updatedUsers) {
+                await updateUserInDb(user.id, { balance: user.balance });
+            }
+        } catch (error) {
+            console.error('Error updating user balances:', error);
+        }
+    };
+
+    const addExpense = async (newExpense: Expense) => {
+        if (!currentUser) return;
+        try {
+            const expenseWithUser = {
+                ...newExpense,
+                createdBy: currentUser.uid,
+                createdAt: new Date()
+            };
+            const addedExpense = await addExpenseToDb(expenseWithUser);
+            setExpenses(prev => [...prev, addedExpense]);
+            
+            // Update user balances
+            const amountPerFriend = newExpense.amount / newExpense.friends.length;
+            const updatedUsers = users.map(user => {
+                if (newExpense.friends.some(friend => friend.id === user.id)) {
+                    return { ...user, balance: user.balance - amountPerFriend };
                 }
                 return user;
             });
-
             setUsers(updatedUsers);
-            setExpenses((prevExpenses) => [...prevExpenses, newExpense]);
+            
+            // Persist the updated balances
+            await updateUserBalances(updatedUsers);
+        } catch (error) {
+            console.error('Error adding expense:', error);
         }
     };
 
@@ -75,29 +155,39 @@ const Home: React.FC = () => {
         setEditingExpense(expense);
     };
 
-    const saveEditedExpense = (updatedExpense: Expense) => {
-        setExpenses((prevExpenses) =>
-            prevExpenses.map((exp) => (exp === editingExpense ? updatedExpense : exp))
-        );
-        setEditingExpense(null);
+    const saveEditedExpense = async (updatedExpense: Expense) => {
+        if (!currentUser) return;
+        try {
+            await updateExpenseInDb(updatedExpense.id, updatedExpense);
+            setExpenses(prevExpenses =>
+                prevExpenses.map(exp => exp.id === updatedExpense.id ? updatedExpense : exp)
+            );
+            setEditingExpense(null);
+        } catch (error) {
+            console.error('Error updating expense:', error);
+        }
     };
 
-    const deleteExpense = (expenseToDelete: Expense) => {
-        // Remove expense and update user balances accordingly
-        setExpenses((prevExpenses) => prevExpenses.filter((exp) => exp !== expenseToDelete));
+    const deleteExpense = async (expenseToDelete: Expense) => {
+        if (!currentUser) return;
+        try {
+            await deleteExpenseFromDb(expenseToDelete.id);
+            setExpenses(prevExpenses => 
+                prevExpenses.filter(exp => exp.id !== expenseToDelete.id)
+            );
 
-        // Adjust the users' balances if necessary after deleting an expense
-        const updatedUsers = users.map((user) => {
-            expenseToDelete.friends.forEach((friend) => {
-                if (friend.id === user.id) {
-                    // Add back the amount to the user's balance
-                    user.balance += expenseToDelete.amount / expenseToDelete.friends.length;
+            // Update user balances
+            const updatedUsers = users.map(user => {
+                if (expenseToDelete.friends.some(friend => friend.id === user.id)) {
+                    const amountToAdd = expenseToDelete.amount / expenseToDelete.friends.length;
+                    return { ...user, balance: user.balance + amountToAdd };
                 }
+                return user;
             });
-            return user;
-        });
-
-        setUsers(updatedUsers);
+            setUsers(updatedUsers);
+        } catch (error) {
+            console.error('Error deleting expense:', error);
+        }
     };
 
     const totalAmount = expenses.reduce((sum, expense) => sum + expense.amount, 0);
@@ -107,6 +197,7 @@ const Home: React.FC = () => {
 
     const exportToCSV = () => {
         const csvContent = "data:text/csv;charset=utf-8," 
+            + "Description,Amount,Category\n"
             + filteredExpenses.map(e => `${e.description},${e.amount},${e.category}`).join("\n");
         const encodedUri = encodeURI(csvContent);
         const link = document.createElement("a");
@@ -114,34 +205,49 @@ const Home: React.FC = () => {
         link.setAttribute("download", "expenses.csv");
         document.body.appendChild(link);
         link.click();
+        document.body.removeChild(link);
     };
 
     return (
         <main className="flex flex-col items-center justify-center min-h-screen p-4 bg-gray-100">
-            <h1 className="text-2xl font-bold">Welcome to Split Expenses w Friends</h1>
+            <button 
+                onClick={handleLogout}
+                className="absolute top-4 right-4 bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600"
+            >
+                Logout
+            </button>
+            
+            <h1 className="text-2xl font-bold mb-8">Welcome to Split Expenses w Friends</h1>
 
-            {/* Add a user (friend) */}
-            <div>
+            <div className="w-full max-w-md mb-6">
                 <input
                     type="text"
                     placeholder="Enter Friend's Name"
                     value={userName}
-                    onChange={(e) => setUserName(e.target.value)} // Track the name input
+                    onChange={(e) => setUserName(e.target.value)}
+                    className="w-full p-2 border border-gray-300 rounded mr-2"
                 />
-                <button onClick={addUser}>Add Friend</button> {/* Trigger addUser function */}
+                <button 
+                    onClick={addUser}
+                    className="mt-2 w-full bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                >
+                    Add Friend
+                </button>
             </div>
 
-            {/* Display all friends */}
-            <h2 className="mt-8 text-xl">Friends</h2>
-            <ul>
+            <h2 className="text-xl font-semibold mb-4">Friends</h2>
+            <ul className="w-full max-w-md mb-8">
                 {users.map((user) => (
-                    <li key={user.id}>
-                        {user.name}: {user.balance < 0 ? `${Math.abs(user.balance).toFixed(2)} owes` : `${user.balance.toFixed(2)} is owed`}
-                        {/* Add delete button */}
+                    <li key={user.id} className="flex justify-between items-center p-3 bg-white rounded shadow mb-2">
+                        <span>
+                            {user.name}: {user.balance < 0 
+                                ? `$${Math.abs(user.balance).toFixed(2)} owes` 
+                                : `$${user.balance.toFixed(2)} is owed`}
+                        </span>
                         {user.name !== 'me' && (
                             <button
                                 onClick={() => setUsers(users.filter((u) => u.id !== user.id))}
-                                className="ml-2 text-red-500"
+                                className="text-red-500 hover:text-red-700"
                             >
                                 Delete
                             </button>
@@ -150,60 +256,79 @@ const Home: React.FC = () => {
                 ))}
             </ul>
 
-            {/* Expense form */}
+            
             <ExpenseForm 
-                onAddExpense={editingExpense ? saveEditedExpense : addExpense} 
-                users={users} // Pass users (friends) to the form
-                initialDescription={editingExpense?.description || ''}
-                initialAmount={editingExpense?.amount || 0}
-                initialCategory={editingExpense?.category || ''}
-                setUsers={setUsers} // Pass setUsers to ExpenseForm
+                onAddExpense={editingExpense ? saveEditedExpense : addExpense}
+                users={users}
+                initialExpense={editingExpense}
+                setUsers={setUsers}
+                userId={currentUser?.uid || ''}
             />
 
-            {/* Filter Expenses by Category */}
             <select 
-                value={filterCategory} 
+                value={filterCategory}
                 onChange={(e) => setFilterCategory(e.target.value)}
-                className="mt-4 p-2 border border-gray-300 rounded"
+                className="w-full max-w-md mt-8 mb-4 p-2 border border-gray-300 rounded"
             >
                 <option value="">All Categories</option>
                 <option value="Food">Food</option>
                 <option value="Travel">Travel</option>
                 <option value="Bills">Bills</option>
+                <option value="Entertainment">Entertainment</option>
+                <option value="Other">Other</option>
             </select>
 
-            {/* Expenses List */}
-            <h2 className="mt-8 text-xl">Expenses</h2>
-                <ul className="w-full max-w-md mt-4 bg-white rounded shadow-md">
-                    {filteredExpenses.map((expense, index) => (
-                        <li key={index} className="flex justify-between p-4 border-b last:border-b-0">
+            <h2 className="text-xl font-semibold mb-4">Expenses</h2>
+            <ul className="w-full max-w-md mb-8">
+                {filteredExpenses.map((expense) => (
+                    <li key={expense.id} className="bg-white rounded shadow mb-3 p-4">
+                        <div className="flex justify-between items-start mb-2">
                             <div>
-                                <span>{expense.description}</span><br />
-                                <span>${expense.amount.toFixed(2)}</span>
-                                <div>
-                                    {expense.friends.map(friend => (
-                                    <div key={friend.id}>
-                                        {friend.name} owes: ${expense.amountsOwed[friend.name].toFixed(2)}
-                                    </div>
-                                ))}
-                                </div>
+                                <h3 className="font-semibold">{expense.description}</h3>
+                                <p className="text-gray-600">${expense.amount.toFixed(2)}</p>
+                                <p className="text-sm text-gray-500">{expense.category}</p>
                             </div>
-            <div>
-                <button onClick={() => handleEditExpense(expense)} className="mr-2 text-blue-500">Edit</button>
-                <button onClick={() => deleteExpense(expense)} className="text-red-500">Delete</button>
-            </div>
-        </li>
-    ))}
-</ul>
+                            <div className="flex space-x-2">
+                                <button 
+                                    onClick={() => handleEditExpense(expense)}
+                                    className="text-blue-500 hover:text-blue-700"
+                                >
+                                    Edit
+                                </button>
+                                <button 
+                                    onClick={() => deleteExpense(expense)}
+                                    className="text-red-500 hover:text-red-700"
+                                >
+                                    Delete
+                                </button>
+                            </div>
+                        </div>
+                        <div className="text-sm text-gray-600">
+                            {expense.friends.map(friend => (
+                                <div key={friend.id}>
+                                    {friend.name} owes: ${expense.amountsOwed[friend.name].toFixed(2)}
+                                </div>
+                            ))}
+                        </div>
+                    </li>
+                ))}
+            </ul>
 
-
-            {/* Total Expenses */}
-            <h2 className="mt-4 text-xl font-bold">Total Expenses: ${totalAmount.toFixed(2)}</h2>
+            <h2 className="text-xl font-bold mb-4">Total Expenses: ${totalAmount.toFixed(2)}</h2>
             
-            {/* Export to CSV */}
-            <button onClick={exportToCSV} className="mt-4 p-2 bg-green-500 text-white rounded hover:bg-green-600">
+            <button 
+                onClick={exportToCSV}
+                className="bg-green-500 text-white px-6 py-2 rounded hover:bg-green-600 mb-4"
+            >
                 Export to CSV
             </button>
+
+            <Link 
+                href="/auth" 
+                className="text-blue-500 hover:text-blue-700 underline"
+            >
+                Go to Login / Sign Up
+            </Link>
         </main>
     );
 };

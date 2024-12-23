@@ -1,14 +1,19 @@
-// src/app/types.ts
+// types.ts
 export interface Expense {
+    id: string;
     description: string;
     amount: number;
-    category: string; // Add the category field
-    friends: User[]; // Array of friends who are splitting the expense
-    amountsOwed: { [key: string]: number }; // A mapping of user names to the amount they owe
+    category: string;
+    friends: Array<{ id: string; name: string }>;
+    amountsOwed: { [key: string]: number };
+    createdBy: string;
+    createdAt: Date;
 }
 
-export interface User {
+export interface AppUser {
     id: string;
     name: string;
-    balance: number; // Tracks how much they owe or are owed
+    balance: number;
+    email?: string;
+    createdBy?: string;
 }
